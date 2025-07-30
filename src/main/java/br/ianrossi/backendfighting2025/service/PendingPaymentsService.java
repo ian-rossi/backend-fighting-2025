@@ -86,6 +86,11 @@ public class PendingPaymentsService {
 						onFailure(context, paymentAPICallsContext, nextPaymentAPICallContext);
 						return Uni.createFrom().failure(th);
 					});
+			}).onFailure().call(throwable -> {
+				throwable.printStackTrace();
+				System.out.println("Failure on call " + paymentAPICallContext.endpointContext().baseURI() + " API: " + throwable);
+				onFailure(context, paymentAPICallsContext, paymentAPICallContext);
+				return Uni.createFrom().failure(throwable);
 			}).chain(ctx -> {
 				System.out.println("POST payments API call context: " + ctx);
 				checkIfMinResponseTimeChanged(context, paymentAPICallsContext, ctx);
