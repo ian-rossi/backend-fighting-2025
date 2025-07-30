@@ -1,0 +1,68 @@
+x-base-template: &base-template
+  cpus: 0.375
+  deploy:
+    resources:
+      limits:
+        cpus: '0.375'
+        memory: 87.5M
+  mem_limit: 87.5M
+  networks:
+    - payment-processor
+  platform: linux/amd64
+
+services:
+    backend-template:
+        <<: *base-template
+        build: .
+        image: ian-rossi/backend-fighting-2025:latest
+        depends_on:
+            - cache
+        environment:
+            DEFAULT_PAYMENT_PROCESSOR_URL: http://payment-processor-default:8080
+            FALLBACK_PAYMENT_PROCESSOR_URL: http://payment-processor-fallback:8080
+            QUARKUS_REDIS_HOSTS: redis://cache/
+    cache:
+        <<: *base-template
+        image: redis:8.0.3-alpine3.21
+        # Index with name 'p' = stores payment info
+        # Field with name 'd' = checks if payment processor is the default or not ('y' means Yes, 'n' means No).
+        # Field with name 't' = Epoch milli timestamp number when the payment was made.
+        # Didn't stored the amount bcs all the payments has the same value
+        command: >
+            sh -c "
+                redis-server /usr/local/etc/redis/redis.conf && 
+                redis-cli FT.CREATE p ON HASH PREFIX 1 p: SCHEMA d TAG t NUMERIC
+            "
+        volumes:
+            - ./redis.conf/:/usr/local/etc/redis/redis.conf:ro
+    load-balancer:
+        <<: *base-template
+        image: nginx:1.29.0-alpine3.22-slim
+        depends_on:
+            - first-backend
+            - second-backend
+        ports:
+            - "9999:80"
+        volumes:
+            - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    first-backend:
+        extends: backend-template
+        environment:
+            DIVIDE_RETRY_DELAY_IS_MS_BY_HALF: false
+            QUARKUS_REST_CLIENT_OTHER_INSTANCE_URL: http://second-backend:8080
+            SHOULD_EXECUTE_DEFAULT_CHECK: true
+            SHOULD_EXECUTE_FALLBACK_CHECK: true
+            SHOULD_SEND_POST_PAYMENTS_API_FAILS_TO_OTHER_INSTANCE: true
+    second-backend:
+        extends: backend-template
+        depends_on:
+            - first-backend
+        environment:
+            DIVIDE_RETRY_DELAY_IS_MS_BY_HALF: true
+            QUARKUS_REST_CLIENT_OTHER_INSTANCE_URL: http://first-backend:8080
+            SHOULD_EXECUTE_DEFAULT_CHECK: false
+            SHOULD_EXECUTE_FALLBACK_CHECK: false
+            SHOULD_SEND_POST_PAYMENTS_API_FAILS_TO_OTHER_INSTANCE: false
+networks:
+  payment-processor:
+    external: true
